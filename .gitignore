@@ -39,3 +39,7 @@ compose.override.yml
 reports/
 artifacts/
 *.lcov
+
+# Local infrastructure inputs (project IDs, state bucket names, and deployment settings)
+*.tfvars
+!*.tfvars.example

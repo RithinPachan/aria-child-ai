@@ -8,7 +8,8 @@ locals {
     "cloudresourcemanager.googleapis.com",
     "logging.googleapis.com",
     "cloudtrace.googleapis.com",
-    "firestore.googleapis.com"
+    "firestore.googleapis.com",
+    "aiplatform.googleapis.com"
   ])
 
   service_names = toset(["gateway", "memory", "guardrails"])
