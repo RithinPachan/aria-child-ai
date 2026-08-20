@@ -1,0 +1,150 @@
+name: Deploy Services to Staging
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'services/gateway/**'
+      - 'services/memory/**'
+      - 'services/guardrails/**'
+      - 'deployment/components.yaml'
+      - '.github/workflows/deploy-staging-services.yml'
+  workflow_dispatch:
+    inputs:
+      component:
+        description: Component to deploy to staging
+        required: true
+        type: choice
+        options: [gateway, memory, guardrails]
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: staging-services-${{ github.event.inputs.component || github.sha }}
+  cancel-in-progress: false
+
+env:
+  GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+  AR_REPOSITORY: aria
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      gateway: ${{ steps.filter.outputs.gateway }}
+      memory: ${{ steps.filter.outputs.memory }}
+      guardrails: ${{ steps.filter.outputs.guardrails }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            gateway:
+              - 'services/gateway/**'
+              - 'deployment/components.yaml'
+            memory:
+              - 'services/memory/**'
+              - 'deployment/components.yaml'
+            guardrails:
+              - 'services/guardrails/**'
+              - 'deployment/components.yaml'
+
+  deploy:
+    name: Build and deploy ${{ matrix.component }}
+    needs: changes
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (matrix.component == 'gateway' && needs.changes.outputs.gateway == 'true') ||
+      (matrix.component == 'memory' && needs.changes.outputs.memory == 'true') ||
+      (matrix.component == 'guardrails' && needs.changes.outputs.guardrails == 'true')
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [gateway, memory, guardrails]
+    runs-on: ubuntu-latest
+    environment: staging
+    outputs:
+      image: ${{ steps.image.outputs.ref }}
+      url: ${{ steps.deploy.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud using OIDC
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Authenticate Docker to Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Define immutable image reference
+        id: image
+        run: |
+          IMAGE="${GCP_REGION}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${AR_REPOSITORY}/aria-${{ matrix.component }}:${GITHUB_SHA}"
+          echo "ref=${IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and publish image with provenance and SBOM
+        uses: docker/build-push-action@v6
+        with:
+          context: services/${{ matrix.component }}
+          push: true
+          tags: ${{ steps.image.outputs.ref }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component }}
+
+      - name: Scan published image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.image.outputs.ref }}
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+
+      - name: Deploy immutable image to Cloud Run
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: aria-${{ matrix.component }}-staging
+          image: ${{ steps.image.outputs.ref }}
+          region: ${{ env.GCP_REGION }}
+          flags: >-
+            --port=8080
+            --service-account=aria-${{ matrix.component }}-staging@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com
+            --min-instances=0
+            --max-instances=3
+            --cpu=1
+            --memory=512Mi
+            --concurrency=80
+            --timeout=60
+            --no-allow-unauthenticated
+
+      - name: Permit external access to the JWT-protected Gateway only
+        if: matrix.component == 'gateway'
+        run: |
+          gcloud run services add-iam-policy-binding aria-gateway-staging \
+            --region "${GCP_REGION}" \
+            --member="allUsers" \
+            --role="roles/run.invoker" \
+            --quiet
+
+      - name: Record staging deployment
+        run: |
+          {
+            echo "## Staging deployment: ${{ matrix.component }}"
+            echo ""
+            echo "- Immutable image: \`${{ steps.image.outputs.ref }}\`"
+            echo "- Git commit: \`${GITHUB_SHA}\`"
+            echo "- Cloud Run URL: \`${{ steps.deploy.outputs.url }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
