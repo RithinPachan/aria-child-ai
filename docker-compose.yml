@@ -1,0 +1,78 @@
+name: aria-local
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    command: ['redis-server', '--appendonly', 'no', '--save', '']
+    read_only: true
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [aria-internal]
+
+  gateway:
+    build:
+      context: ./services/gateway
+    environment:
+      PORT: '8080'
+      ENVIRONMENT: development
+      GCP_PROJECT_ID: ${GCP_PROJECT_ID:-aria-local}
+      GEMINI_LOCATION: ${GEMINI_LOCATION:-us-central1}
+      JWT_PUBLIC_KEY_PATH: /run/secrets/jwt-public-key
+    secrets:
+      - jwt-public-key
+    ports:
+      - '8000:8080'
+    depends_on:
+      redis:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks: [aria-edge, aria-internal]
+
+  memory:
+    build:
+      context: ./services/memory
+    environment:
+      PORT: '8080'
+      ENVIRONMENT: development
+      REDIS_URL: redis://redis:6379/0
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-aria-local}
+    ports:
+      - '8001:8080'
+    depends_on:
+      redis:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks: [aria-internal]
+
+  guardrails:
+    build:
+      context: ./services/guardrails
+    environment:
+      PORT: '8080'
+      ENVIRONMENT: development
+    ports:
+      - '8002:8080'
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks: [aria-internal]
+
+networks:
+  aria-edge:
+    driver: bridge
+  aria-internal:
+    driver: bridge
+    internal: true
+
+secrets:
+  jwt-public-key:
+    file: ${JWT_PUBLIC_KEY_PATH:?Set JWT_PUBLIC_KEY_PATH in .env.local}

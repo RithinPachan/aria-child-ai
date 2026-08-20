@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "files": [],
+  "references": [
+    { "path": "./apps/aria-face-app" },
+    { "path": "./apps/parent-dashboard" },
+    { "path": "./packages/hal" },
+    { "path": "./packages/shared-types" }
+  ]
+}

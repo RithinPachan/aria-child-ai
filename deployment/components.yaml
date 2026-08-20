@@ -1,0 +1,155 @@
+# ARIA component release catalog.
+# This file is the single source of truth for CI/CD path filters, deployment targets,
+# ownership, health checks, and release policies.
+#
+# Initial strategy: one GitHub monorepo with independent artifacts and deployments.
+# This preserves atomic cross-component changes while keeping every component releasable
+# on its own. A component can later be extracted to its own repository without changing
+# its Cloud Run service name or container contract.
+
+components:
+  gateway:
+    kind: cloud-run-service
+    source_paths:
+      - services/gateway/**
+      - packages/shared-types/**
+      - deployment/components.yaml
+    image: aria-gateway
+    cloud_run_service: aria-gateway
+    port: 8080
+    health_path: /health
+    min_instances:
+      staging: 0
+      production: 1
+    max_instances:
+      staging: 3
+      production: 30
+    cpu: '1'
+    memory: 1Gi
+    timeout_seconds: 300
+    concurrency: 80
+    # Mobile devices reach this endpoint directly. The Gateway enforces Firebase/JWT
+    # validation before a WebSocket session is accepted; no internal service is exposed.
+    public: true
+
+  memory:
+    kind: cloud-run-service
+    source_paths:
+      - services/memory/**
+      - deployment/components.yaml
+    image: aria-memory
+    cloud_run_service: aria-memory
+    port: 8080
+    health_path: /health
+    min_instances:
+      staging: 0
+      production: 1
+    max_instances:
+      staging: 3
+      production: 15
+    cpu: '1'
+    memory: 512Mi
+    timeout_seconds: 60
+    concurrency: 80
+    public: false
+
+  guardrails:
+    kind: cloud-run-service
+    source_paths:
+      - services/guardrails/**
+      - deployment/components.yaml
+    image: aria-guardrails
+    cloud_run_service: aria-guardrails
+    port: 8080
+    health_path: /health
+    min_instances:
+      staging: 0
+      production: 1
+    max_instances:
+      staging: 3
+      production: 30
+    cpu: '1'
+    memory: 512Mi
+    timeout_seconds: 30
+    concurrency: 100
+    public: false
+
+  aria-face-app:
+    kind: expo-mobile-app
+    source_paths:
+      - apps/aria-face-app/**
+      - packages/hal/**
+      - packages/shared-types/**
+      - deployment/components.yaml
+    eas_project_env: EXPO_PUBLIC_ARIA_FACE_EAS_PROJECT_ID
+    release_channels:
+      staging: preview
+      production: production
+
+  parent-dashboard:
+    kind: expo-mobile-app
+    source_paths:
+      - apps/parent-dashboard/**
+      - packages/shared-types/**
+      - deployment/components.yaml
+    eas_project_env: EXPO_PUBLIC_PARENT_DASHBOARD_EAS_PROJECT_ID
+    release_channels:
+      staging: preview
+      production: production
+
+  edge-runtime:
+    kind: device-artifact
+    source_paths:
+      - packages/hal/**
+      - packages/aria-sdk/**
+      - deployment/components.yaml
+    artifact: aria-edge-runtime
+    release_channel: stable
+    signing_required: true
+
+release_policy:
+  pull_request:
+    actions:
+      - lint
+      - typecheck
+      - unit-test
+      - dependency-review
+      - secret-scan
+      - container-scan
+  main:
+    actions:
+      - build-versioned-artifact
+      - deploy-staging
+      - smoke-test
+  production_tag:
+    format: 'component-name/vMAJOR.MINOR.PATCH'
+    actions:
+      - require-github-environment-approval
+      - deploy-production
+      - run-post-deploy-smoke-test
+      - create-github-release
+
+required_github_environments:
+  - staging
+  - production
+
+required_repository_secrets:
+  - GCP_PROJECT_ID
+  - GCP_REGION
+  - GCP_WIF_PROVIDER
+  - GCP_DEPLOYER_SERVICE_ACCOUNT
+  - EXPO_TOKEN
+
+required_repository_variables:
+  - ARIA_ALLOWED_ORIGINS
+  - ARIA_LOG_LEVEL
+  - ARIA_RELEASE_REGION
+
+prohibited_practices:
+  - long_lived_gcp_json_keys
+  - plaintext_secrets_in_repository
+  - direct_production_deployment_from_pull_request
+  - mutable_image_only_deployments
+  - public_cloud_run_services_without_explicit_approval
+  - child_pii_in_build_logs
+  - manual_hotfixes_without_a_git_commit

@@ -1,0 +1,163 @@
+name: Pull Request Validation
+
+on:
+  pull_request:
+    branches: [main]
+  merge_group:
+    branches: [main]
+
+# Never grant write or cloud permissions to pull-request workflows.
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Detect changed components
+    runs-on: ubuntu-latest
+    outputs:
+      gateway: ${{ steps.filter.outputs.gateway }}
+      memory: ${{ steps.filter.outputs.memory }}
+      guardrails: ${{ steps.filter.outputs.guardrails }}
+      mobile: ${{ steps.filter.outputs.mobile }}
+      infra: ${{ steps.filter.outputs.infra }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            gateway:
+              - 'services/gateway/**'
+              - 'deployment/components.yaml'
+            memory:
+              - 'services/memory/**'
+              - 'deployment/components.yaml'
+            guardrails:
+              - 'services/guardrails/**'
+              - 'deployment/components.yaml'
+            mobile:
+              - 'apps/**'
+              - 'packages/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+            infra:
+              - 'infra/**'
+              - '.github/**'
+              - 'deployment/**'
+
+  javascript-quality:
+    name: JavaScript quality gates
+    needs: changes
+    if: needs.changes.outputs.mobile == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install deterministic dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Check formatting
+        run: pnpm format:check
+      - name: Lint
+        run: pnpm lint
+      - name: Type check
+        run: pnpm typecheck
+      - name: Test
+        run: pnpm test
+
+  python-quality:
+    name: ${{ matrix.service }} quality gates
+    needs: changes
+    if: >-
+      (matrix.service == 'gateway' && needs.changes.outputs.gateway == 'true') ||
+      (matrix.service == 'memory' && needs.changes.outputs.memory == 'true') ||
+      (matrix.service == 'guardrails' && needs.changes.outputs.guardrails == 'true')
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [gateway, memory, guardrails]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: services/${{ matrix.service }}/pyproject.toml
+      - name: Install service and quality tooling
+        working-directory: services/${{ matrix.service }}
+        run: python -m pip install --upgrade pip && pip install -e '.[dev]'
+      - name: Ruff
+        working-directory: services/${{ matrix.service }}
+        run: ruff check src tests
+      - name: Mypy
+        working-directory: services/${{ matrix.service }}
+        run: mypy src
+      - name: Unit tests with coverage
+        working-directory: services/${{ matrix.service }}
+        run: pytest --cov=src --cov-report=term-missing --cov-fail-under=80
+      - name: Build container
+        uses: docker/build-push-action@v6
+        with:
+          context: services/${{ matrix.service }}
+          push: false
+          tags: aria-${{ matrix.service }}:pr-${{ github.event.pull_request.number || github.run_number }}
+          load: true
+      - name: Scan container filesystem and dependencies
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: aria-${{ matrix.service }}:pr-${{ github.event.pull_request.number || github.run_number }}
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          deny-licenses: GPL-2.0, GPL-3.0, AGPL-3.0
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  infrastructure-validation:
+    name: Terraform validation
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.5
+          terraform_wrapper: false
+      - name: Format check
+        run: terraform -chdir=infra/terraform fmt -check -recursive
+      - name: Initialize without remote state
+        run: terraform -chdir=infra/terraform/environments/staging init -backend=false
+      - name: Validate staging configuration
+        run: terraform -chdir=infra/terraform/environments/staging validate

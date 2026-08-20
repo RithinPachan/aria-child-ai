@@ -1,0 +1,41 @@
+node_modules/
+dist/
+build/
+.expo/
+*.env
+*.env.local
+*.env.production
+.DS_Store
+*.log
+coverage/
+.terraform/
+*.tfstate
+*.tfstate.backup
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+*.egg-info/
+.ruff_cache/
+
+# Credentials, signing material, and local deployment inputs
+secrets/
+keys/
+*.pem
+*.key
+*.p12
+*.p8
+*.mobileprovision
+service-account*.json
+firebase-adminsdk-*.json
+.envrc
+.env.*.local
+
+# Local device and container state
+.aria/
+compose.override.yml
+
+# Test and release artifacts
+reports/
+artifacts/
+*.lcov
