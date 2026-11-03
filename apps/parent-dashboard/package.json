@@ -14,7 +14,7 @@
   "dependencies": {
     "@aria/shared-types": "workspace:*",
     "@expo/vector-icons": "^14.0.0",
-    "@react-navigation/bottom-tabs": "^6.6.0",
+    "@react-navigation/bottom-tabs": "^7.18.16",
     "@react-navigation/native": "^6.1.0",
     "@react-navigation/stack": "^6.4.0",
     "@tanstack/react-query": "^5.56.0",
