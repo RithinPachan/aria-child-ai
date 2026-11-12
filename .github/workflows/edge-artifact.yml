@@ -30,11 +30,11 @@ jobs:
     name: Validate and package edge runtime
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
         with:
           version: 9.15.4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -53,14 +53,14 @@ jobs:
           sha256sum "dist/aria-edge-runtime-${GITHUB_SHA}.tar.gz" \
             | tee "dist/aria-edge-runtime-${GITHUB_SHA}.sha256"
       - name: Upload edge runtime artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: aria-edge-runtime-${{ github.sha }}
           path: dist/
           if-no-files-found: error
           retention-days: 30
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/aria-edge-runtime-${{ github.sha }}.tar.gz
       - name: Add artifact details to the workflow summary
